@@ -1,0 +1,59 @@
+apply plugin: 'com.android.library'
+apply plugin: 'maven-publish'
+
+android {
+    namespace "com.termux.terminal"
+    compileSdkVersion 31
+
+    defaultConfig {
+        minSdkVersion 21
+        targetSdkVersion 28
+        testInstrumentationRunner "android.support.test.runner.AndroidJUnitRunner"
+
+        // PINDAHKAN ARGUMENTS KE SINI
+        externalNativeBuild {
+            ndkBuild {
+                arguments "HOST_ARCH=aarch64", "HOST_TAG=linux-aarch64"
+                // Tambahkan ini jika build masih komplain soal ABI
+                abiFilters "arm64-v8a"
+            }
+        }
+    }
+
+    sourceSets {
+        main {
+            java.srcDirs = ['src/main/java']
+        }
+    }
+
+    // Tentukan PATH file Android.mk di luar defaultConfig
+    externalNativeBuild {
+        ndkBuild {
+            path "src/main/jni/Android.mk"
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    testOptions {
+        unitTests.returnDefaultValues = true
+    }
+}
+
+dependencies {
+    implementation "androidx.annotation:annotation:1.3.0"
+    implementation "androidx.appcompat:appcompat:1.3.1"
+    testImplementation 'junit:junit:4.13.1'
+}
+
+// ... sisanya (publishing & tasks) tetap sama
