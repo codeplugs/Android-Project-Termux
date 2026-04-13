@@ -41,7 +41,8 @@ packaging {
     buildTypes {
         release {
 		
-            minifyEnabled false
+            minifyEnabled true
+            shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }
@@ -69,6 +70,21 @@ dependencies {
 }
 
 
+tasks.register("installAfterAssemble") {
+    doLast {
+        def apkPath = "$buildDir/outputs/apk/debug/app-debug.apk"
+        println "📱 Installing APK..."
+        exec {
+    commandLine "adb", "install", "-r","-t", apkPath
+}
 
+    }
+}
+
+afterEvaluate {
+    tasks.named("assembleDebug").configure {
+        finalizedBy("installAfterAssemble")
+    }
+}
 
 

@@ -40,7 +40,9 @@ public final class TerminalRenderer {
         mTextPaint.setTypeface(typeface);
         mTextPaint.setAntiAlias(true);
         mTextPaint.setTextSize(textSize);
-
+        mTextPaint.setFakeBoldText(false); 
+        mTextPaint.setSubpixelText(true);
+        //mTextPaint.setLetterSpacing(0.05f);
         mFontLineSpacing = (int) Math.ceil(mTextPaint.getFontSpacing());
         mFontAscent = (int) Math.ceil(mTextPaint.ascent());
         mFontLineSpacingAndAscent = mFontLineSpacing + mFontAscent;

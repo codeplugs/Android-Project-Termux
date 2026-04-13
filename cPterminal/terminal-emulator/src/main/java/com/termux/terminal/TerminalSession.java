@@ -151,6 +151,8 @@ public final class TerminalSession extends TerminalOutput {
         this.mArgs = args;
         this.mEnv = env;
     }
+    
+
 
     /** Inform the attached pty of the new size and reflow or initialize the emulator. */
     public void updateSize(int columns, int rows) {

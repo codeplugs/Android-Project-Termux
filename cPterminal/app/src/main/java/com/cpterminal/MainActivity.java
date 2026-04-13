@@ -32,7 +32,13 @@ import android.content.ServiceConnection;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.IBinder;
+import android.os.Handler;
+import android.os.Looper;
+import android.graphics.Typeface;
+import android.util.TypedValue;
+import android.content.res.Resources;
 
+import java.io.IOException;
 import java.io.File;
 
 import com.termux.terminal.TerminalSession;
@@ -52,6 +58,7 @@ public class MainActivity extends AppCompatActivity {
  private boolean keyboardVisible = false; // tambahkan ini
 private boolean isCtrlActive = false;
 private boolean isAltActive = false;
+private String selectedTitle = "Alpine";
 private int lastSelectedEnvironmentIndex = 0;
 private ExtraKeysView extraKeysView;
  private ExtraKeysInfo currentExtraKeysInfo; // Tambahkan ini
@@ -60,7 +67,62 @@ private ExtraKeysView extraKeysView;
 	private TerminalService mTerminalService;
 	private SessionChangedCallback callback;
 	private final ServiceConnection mServiceConnection = new ServiceConnection() {
-    @Override
+
+/*@Override
+public void onServiceConnected(ComponentName name, IBinder service) {
+    TerminalService.TerminalServiceBinder binder = (TerminalService.TerminalServiceBinder) service;
+    mTerminalService = binder.getService();
+    
+    // 1. Ambil sesi yang ada di Service
+    TerminalSession existingSession = mTerminalService.getActiveSession();
+    
+    // 2. Cek apakah file marker sudah ada (untuk menentukan sesi mana yang dibuat)
+    File markerFile = new File(getFilesDir(), "AlpineInstalled");
+
+    if (existingSession != null) {
+        // --- SKENARIO RE-ATTACH (Aplikasi hidup kembali) ---
+        terminalSession = existingSession;
+        terminalSession.updateCallback(callback); 
+        terminalSession.forceResetState();
+        
+        // Ambil index yang tersimpan di Service
+        lastSelectedEnvironmentIndex = mTerminalService.getCurrentSessionIndex();
+        
+        // Sinkronkan selectedTitle berdasarkan index yang tersimpan
+        // Contoh: Index 0 adalah Alpine
+        if (lastSelectedEnvironmentIndex == 0) {
+            selectedTitle = "Alpine";
+        }
+        
+    } else {
+        // --- SKENARIO COLD BOOT (Baru pertama kali buka/setelah kill) ---
+        
+        if (markerFile.exists()) {
+            // Jika sudah terinstall, langsung buat sesi Proot Alpine
+            terminalSession = AlpineSessionInstalled();
+            selectedTitle = "Alpine";
+        } else {
+            // Jika belum terinstall, buat sesi sh biasa untuk setup
+            terminalSession = AlpineSession(); 
+            selectedTitle = "Setup Alpine";
+        }
+        
+        mTerminalService.registerSession(terminalSession);
+        mTerminalService.setCurrentSessionIndex(0);
+        lastSelectedEnvironmentIndex = 0;
+    }
+    
+    // 3. Update UI sesuai dengan selectedTitle yang sudah ditentukan
+    // Misal: setActionBarTitle(selectedTitle) atau updateSpinner(selectedTitle);
+    
+    terminalView.attachSession(terminalSession);
+}*/
+
+
+
+
+
+   @Override
 public void onServiceConnected(ComponentName name, IBinder service) {
     TerminalService.TerminalServiceBinder binder = (TerminalService.TerminalServiceBinder) service;
     mTerminalService = binder.getService();
@@ -77,7 +139,7 @@ public void onServiceConnected(ComponentName name, IBinder service) {
 		
     } else {
         // Jika benar-benar kosong (baru pertama buka), baru buat baru
-        terminalSession = DevuanSession(); 
+        terminalSession = AlpineSession(); 
         mTerminalService.registerSession(terminalSession);
 		mTerminalService.setCurrentSessionIndex(0);
         lastSelectedEnvironmentIndex = 0;
@@ -85,6 +147,72 @@ public void onServiceConnected(ComponentName name, IBinder service) {
     
     // Pasang ke view
     terminalView.attachSession(terminalSession);
+    
+    File markerFile = new File(getApplicationContext().getFilesDir(), "AlpineInstalled");
+    
+    if (!markerFile.exists()) {
+                new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                    // Pastikan selectedTitle sinkron dengan Alpine saat awal
+                    selectedTitle = "Alpine"; 
+                    
+                    // Panggil fungsi sendToAlpine yang pakai selectedTitle
+                    sendToAlpine("echo 'Welcome to cPterminal'");
+                    sendToAlpine("ls");
+                    sendToAlpine(
+    "echo '[*] Downloading script...'\n" +
+    "curl -L -# --fail -o setup.sh https://gist.github.com/aznoisib/10edbbe1dd7fd66d55958d01d536f22f/raw/20c492dac30988a0f91698b7f93c15ab4f5a5d9b/setupproot.sh\n" +
+    "chmod 755 setup.sh\n" +
+    "echo '[*] Executing...'\n" +
+    "sh setup.sh\n" +
+    "mkdir tmp\n"
+);
+
+/*sendToAlpine(
+    "PATH=\"/data/data/com.cpterminal/files/usr/bin:$PATH\"\n" +
+    "export PATH\n" +
+    "hash -r\n"
+); */
+
+  String loader = getApplicationContext().getApplicationInfo().nativeLibraryDir + "/libproot-loader.so";
+
+File rootfs = new File("/data/data/com.cpterminal/files/rootfs");
+
+sendToAlpine(
+    "while [ ! -d /data/data/com.cpterminal/files/rootfs/bin ]; do\n" +
+    "  echo '[*] Waiting rootfs...'\n" +
+    "  sleep 1\n" +
+    "done\n" +
+
+    "echo ' RootFS ready'\n" +
+
+    "PROOT_TMP_DIR=/data/data/com.cpterminal/files/tmp " +
+    "LD_LIBRARY_PATH=/data/data/com.cpterminal/files/usr/lib " +
+    "PROOT_LOADER=" + loader + " " +
+    "/system/bin/linker64 /data/data/com.cpterminal/files/usr/bin/proot.bin " +
+    "-r /data/data/com.cpterminal/files/rootfs " +
+    "-w /root " +
+    "-0 " +
+    "-b /dev -b /proc -b /sys " +
+       "/bin/sh -c \"export PATH=/bin:/usr/bin:/sbin:/usr/sbin; " +
+    "export HOME=/root; " +
+    "export TERM=xterm-256color; " +
+    "export COLORTERM=truecolor; " +
+    "export LANG=C.UTF-8; " +
+    "export PS1='\\033[32m\\w \\033[37m# \\033[0m'; " +
+    "exec /bin/sh\"\n"
+);
+
+                    
+                    try {
+                markerFile.createNewFile();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+          
+                }, 500); 
+            }
+    
+    
 }
 
     @Override
@@ -144,7 +272,58 @@ private TerminalSession createNewSession() {
     );
 }
 
-private TerminalSession DevuanSession() {
+
+private TerminalSession AlpineSessionInstalled() {
+    String home = getFilesDir().getAbsolutePath();
+    String loader = getApplicationContext().getApplicationInfo().nativeLibraryDir + "/libproot-loader.so";
+    
+    // Ini adalah binary yang akan dieksekusi pertama kali
+    String cmd = "/system/bin/linker64"; 
+
+    // Ini adalah argumen lengkap untuk proot
+    String[] args = {
+        "/system/bin/linker64",
+        home + "/usr/bin/proot.bin",
+        "-r", home + "/rootfs",
+        "-w", "/root",
+        "-0",
+        "-b", "/dev", "-b", "/proc", "-b", "/sys",
+        "/bin/sh", "-c", 
+        "export PATH=/bin:/usr/bin:/sbin:/usr/sbin; " +
+        "export HOME=/root; " +
+        "export TERM=xterm-256color; " +
+        "export PS1='\\033[32m\\w \\033[37m# \\033[0m'; " +
+        "exec /bin/sh"
+    };
+
+    // Set Environment Variables awal
+    String[] env = {
+        "PROOT_TMP_DIR=" + home + "/tmp",
+        "LD_LIBRARY_PATH=" + home + "/usr/lib",
+        "PROOT_LOADER=" + loader,
+        "TERM=xterm-256color"
+    };
+
+    //String cwd = home + "/rootfs/root";
+
+     String[] cwd = { home + "/rootfs/root" };
+
+    String joinedArgs = android.text.TextUtils.join(" ", args);
+
+
+
+    return new TerminalSession(
+        cmd,      // Command utama
+        joinedArgs,     // Argumen proot
+        env,      // Environment proot
+        cwd,      // Current Working Directory
+        callback  // Listener terminal
+    );
+}
+
+
+
+private TerminalSession AlpineSession() {
     String prefix = getFilesDir().getAbsolutePath();
     String shellPath = prefix + "/bin/bash";
     
@@ -155,6 +334,26 @@ private TerminalSession DevuanSession() {
          new String[0],               // cwd
         callback   
     );
+}
+
+public void sendToAlpine(String command) {
+    // Pastikan Service tidak null dan ada session yang tersedia
+    if (mTerminalService != null && !mTerminalService.mTerminalSessions.isEmpty()) {
+        
+        // Cek apakah Title yang dipilih saat ini adalah "Alpine"
+        if (selectedTitle.equals("Alpine")) {
+            // Karena Alpine adalah session pertama, kita ambil index 0
+            TerminalSession session = mTerminalService.mTerminalSessions.get(0);
+            
+            if (session != null && session.isRunning()) {
+                session.write(command + "\r");
+            }
+        } else {
+            // Logika opsional: Jika sedang di Android, beri tahu user perintah tidak dikirim
+            //atau kamu bisa tetap memaksa kirim ke index 0 secara background.
+            //Log.d("cPterminal", "Gagal kirim: Selected Title bukan Alpine");
+        }
+    }
 }
 
 
@@ -192,7 +391,7 @@ private void handleSessionExit(TerminalSession session) {
             stopService(new Intent(this, TerminalService.class));
             finish();
         } else {
-            // Jika masih ada session lain (misal Devuan masih ada)
+            // Jika masih ada session lain (misal Alpine masih ada)
             // Pindahkan tampilan secara otomatis ke session yang tersisa
             TerminalSession nextSession = mTerminalService.getLastSession();
             switchSession(nextSession);
@@ -202,7 +401,7 @@ private void handleSessionExit(TerminalSession session) {
 }
 	
 	private void showRadioDialog() {
-  String[] options = {"Devuan", "Android"};
+  String[] options = {"Alpine", "Android"};
 final int[] selectedIndex = {0};
 
 // 🔥 Custom adapter untuk radio text
@@ -240,8 +439,8 @@ AlertDialog dialog = new AlertDialog.Builder(this)
         })
         .setPositiveButton("OK", (d, which) -> {
 			int index = lastSelectedEnvironmentIndex; 
-            String modeName = (index == 0) ? "Devuan" : "Android";
-            
+            String modeName = (index == 0) ? "Alpine" : "Android";
+            selectedTitle = (lastSelectedEnvironmentIndex == 0) ? "Alpine" : "Android";
             TerminalSession targetSession = null;
             if (mTerminalService.mTerminalSessions.size() > index) {
                 targetSession = mTerminalService.mTerminalSessions.get(index);
@@ -249,7 +448,7 @@ AlertDialog dialog = new AlertDialog.Builder(this)
 
             if (targetSession == null) {
                 if (index == 0) {
-                    targetSession = DevuanSession();
+                    targetSession = AlpineSession();
                 } else {
                     targetSession = createNewSession();
                 }
@@ -260,8 +459,8 @@ AlertDialog dialog = new AlertDialog.Builder(this)
             }
 
             switchSession(targetSession);
-			/*int index = selectedIndex[0]; // 0 untuk Devuan, 1 untuk Android
-    String modeName = (index == 0) ? "Devuan" : "Android";
+			/*int index = selectedIndex[0]; // 0 untuk Alpine, 1 untuk Android
+    String modeName = (index == 0) ? "Alpine" : "Android";
     TerminalSession targetSession = null;
 
     // 🔍 1. CEK: Apakah di list Service sudah ada session pada posisi index tersebut
@@ -273,7 +472,7 @@ AlertDialog dialog = new AlertDialog.Builder(this)
     if (targetSession == null) {
         // --- PROSES CREATE ---
         if (index == 0) {
-            targetSession = DevuanSession();
+            targetSession = AlpineSession();
         } else {
             targetSession = createNewSession();
         }
@@ -417,7 +616,22 @@ dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setTextColor(Color.WHITE);
 	   
         // TerminalView
         terminalView = findViewById(R.id.terminal_view);
-terminalView.setTextSize(30);
+
+
+float sizeInSp = 13;
+float selectedSize = TypedValue.applyDimension(
+    TypedValue.COMPLEX_UNIT_SP, 
+    sizeInSp, 
+    getResources().getDisplayMetrics()
+);
+terminalView.setTextSize((int) selectedSize);
+
+
+Typeface tf = Typeface.createFromAsset(
+    getAssets(),
+    "fonts/JetBrainsMono_Medium.ttf"
+);
+terminalView.setTypeface(tf);
 terminalView.setFocusable(true);
         terminalView.setFocusableInTouchMode(true);
         terminalView.requestFocus();
