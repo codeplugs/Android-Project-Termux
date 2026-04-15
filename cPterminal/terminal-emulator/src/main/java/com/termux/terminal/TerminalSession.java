@@ -103,6 +103,8 @@ public final class TerminalSession extends TerminalOutput {
 
     /** Set by the application for user identification of session, not by terminal. */
     public String mSessionName;
+    
+    public int mSessionId;
 
     @SuppressLint("HandlerLeak")
     final Handler mMainThreadHandler = new Handler() {

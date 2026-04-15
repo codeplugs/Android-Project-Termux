@@ -38,9 +38,13 @@ import android.content.res.Resources;
 import android.view.Gravity;
 import android.widget.ProgressBar; // Jika ingin pakai animasi muter
 import android.widget.LinearLayout; // Untuk menyusun ProgressBar & Teks
+import android.view.LayoutInflater;
+import android.widget.ListView;
 
 import java.io.IOException;
 import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
 
 import com.termux.terminal.TerminalSession;
 import com.termux.terminal.TerminalEmulator;
@@ -56,12 +60,20 @@ import com.google.android.material.button.MaterialButton;
 
 
 public class MainActivity extends AppCompatActivity {
+	// Simpan tipe session: 0 untuk Alpine, 1 untuk Android
+private List<Integer> sessionTypes = new ArrayList<>();
+
  private boolean keyboardVisible = false; // tambahkan ini
 private boolean isCtrlActive = false;
 private boolean isAltActive = false;
 private String selectedTitle = "Alpine";
 private AlertDialog loadingDialog;
 private int lastSelectedEnvironmentIndex = 0;
+private int sessionCounter = 0;
+private int lastSessionNumber = 0;
+private ListView globalListView;
+private ArrayAdapter<TerminalSession> sessionAdapter;
+private TextView sessionBadgeTxt;
 private ExtraKeysView extraKeysView;
  private ExtraKeysInfo currentExtraKeysInfo; // Tambahkan ini
     private TerminalView terminalView;
@@ -136,8 +148,9 @@ public void onServiceConnected(ComponentName name, IBinder service) {
     	
         terminalSession = existingSession;
         terminalSession.updateCallback(callback); 
-        lastSelectedEnvironmentIndex = mTerminalService.getCurrentSessionIndex();
-           if (markerFile.exists()) {
+        //lastSelectedEnvironmentIndex = mTerminalService.getCurrentSessionIndex();
+          switchSession(terminalSession);
+            if (markerFile.exists()) {
             //selectedTitle = "Alpine";
         } else {
             //selectedTitle = "Setup Alpine";
@@ -186,6 +199,7 @@ sendToAlpine(
             }, 1000);
         }
         mTerminalService.registerSession(terminalSession);
+        
     }
     terminalView.attachSession(terminalSession);
 }
@@ -239,13 +253,15 @@ private TerminalSession createNewSession() {
     String prefix = getFilesDir().getAbsolutePath();
     String shellPath = prefix + "/bin/bash";
     
-    return new TerminalSession(
+    TerminalSession session = new TerminalSession(
          "/system/bin/sh",   // command
         prefix,               // args
          new String[0],               // env
          new String[0],               // cwd
         callback   
     );
+    session.mSessionName = "Android";
+    return session;
 }
 
 private void switchToAlpineProper() {
@@ -307,6 +323,8 @@ private TerminalSession AlpineSessionInstalled() {
     "-b", "/dev",
     "-b", "/proc",
     "-b", "/sys",
+    "-b", "/sdcard",
+     "-b", "/storage",
     "-w", "/root",
      "/bin/sh",
     "-c", "cat /etc/motd; exec /bin/sh -l"
@@ -326,13 +344,17 @@ private TerminalSession AlpineSessionInstalled() {
         "PATH=/usr/bin:/bin:/usr/sbin:/sbin"
     };
 
-    return new TerminalSession(
+    TerminalSession session = new TerminalSession(
         shellPath, 
         cwd, 
         args, 
         env, 
         callback
     );
+    
+    session.mSessionName = "Alpine";
+    
+    return session;
 }
 
 
@@ -350,6 +372,16 @@ private TerminalSession AlpineSession() {
         callback   
     );
 }
+
+public void updateSessionBadge() {
+    if (sessionBadgeTxt != null && mTerminalService != null) {
+        runOnUiThread(() -> {
+            int count = mTerminalService.mTerminalSessions.size();
+            sessionBadgeTxt.setText(String.valueOf(count));
+        });
+    }
+}
+
 
 public void sendToAlpine(String command) {
     // Pastikan Service tidak null dan ada session yang tersedia
@@ -374,7 +406,15 @@ public void sendToAlpine(String command) {
 
 private void switchSession(TerminalSession session) {
     if (session == null) return;
-    
+    String type = session.mSessionName; 
+
+    if ("Alpine".equals(type)) {
+        lastSelectedEnvironmentIndex = 0;
+        selectedTitle = "Alpine";
+    } else {
+        lastSelectedEnvironmentIndex = 1;
+        selectedTitle = "Android";
+    }
     this.terminalSession = session;
     
     // PENTING: Update callback agar session lama lapor ke activity yang sekarang
@@ -383,9 +423,10 @@ private void switchSession(TerminalSession session) {
     if (mTerminalService != null) {
         int index = mTerminalService.mTerminalSessions.indexOf(session);
         if (index != -1) {
+        	
             mTerminalService.setCurrentSessionIndex(index);
             // Update juga variabel radio button agar tetap sinkron
-            lastSelectedEnvironmentIndex = index; 
+            //lastSelectedEnvironmentIndex = index; 
         }
     }
     // Pasang ke view
@@ -395,8 +436,53 @@ private void switchSession(TerminalSession session) {
 }
 
 
+private int getMaxSessionId() {
+    int maxId = 0;
+    for (TerminalSession s : mTerminalService.mTerminalSessions) {
+        if (s.mSessionId > maxId) maxId = s.mSessionId;
+    }
+    return maxId;
+}
+
+private void addNewSession() {
+    if (mTerminalService == null) return;
+    sessionCounter = getMaxSessionId(); // sync dulu
+    sessionCounter++;
+    TerminalSession newSession;
+    
+    // Cek index yang sedang aktif (0: Alpine, 1: Android)
+    if (lastSelectedEnvironmentIndex == 0) {
+        // Buat sesi Alpine baru
+        newSession = AlpineSessionInstalled();
+        
+        Toast.makeText(this, "New Alpine Session", Toast.LENGTH_SHORT).show();
+    } else {
+        // Buat sesi Android baru
+        newSession = createNewSession();
+        
+        Toast.makeText(this, "New Android Session", Toast.LENGTH_SHORT).show();
+    }
+    
+    newSession.mSessionId = sessionCounter;
+    
+    // Daftarkan ke service
+    mTerminalService.registerSession(newSession);
+    
+    // Langsung pindah ke sesi yang baru dibuat
+    switchSession(newSession);
+    updateSessionBadge();
+    if (sessionAdapter != null) {
+        sessionAdapter.notifyDataSetChanged();
+    }
+    
+    
+}
+
 private void handleSessionExit(TerminalSession session) {
     if (mTerminalService != null) {
+    	session.mSessionId = sessionCounter  - 1;
+    	TerminalSession currentSession = terminalView.getCurrentSession();
+
         // 1. Hapus session dari List di Service
         mTerminalService.removeSession(session);
         
@@ -408,9 +494,17 @@ private void handleSessionExit(TerminalSession session) {
         } else {
             // Jika masih ada session lain (misal Alpine masih ada)
             // Pindahkan tampilan secara otomatis ke session yang tersisa
+            if (session == currentSession) {
             TerminalSession nextSession = mTerminalService.getLastSession();
+            
             switchSession(nextSession);
             Toast.makeText(this, "Session ditutup. Berpindah ke session aktif lainnya.", Toast.LENGTH_SHORT).show();
+       } else {
+       	lastSessionNumber = session.mSessionId;
+            // 4. Kalau yang dihapus BUKAN session aktif
+            // Tidak perlu pindah session
+            Toast.makeText(this, "Session lain ditutup.", Toast.LENGTH_SHORT).show();
+        }
         }
     }
 }
@@ -446,11 +540,120 @@ private void dismissLoadingDialog() {
 }
 
 	
-	
+	private void showSessionListDialog() {
+    if (mTerminalService == null) return;
+
+    List<TerminalSession> sessions = mTerminalService.mTerminalSessions;
+
+    // Kita buat final array agar bisa diakses dari dalam inner class adapter
+    final AlertDialog[] dialogWrapper = new AlertDialog[1];
+
+    sessionAdapter = new ArrayAdapter<TerminalSession>(
+            this, R.layout.item_session, sessions) {
+        @Override
+        public View getView(int position, View convertView, ViewGroup parent) {
+            /*if (convertView == null) {
+                convertView = getLayoutInflater().inflate(R.layout.item_session, parent, false);
+            }*/
+            if (convertView == null) {
+    // Bungkus layout dengan tema Material khusus untuk baris ini saja
+    Context themeWrapper = new androidx.appcompat.view.ContextThemeWrapper(getContext(), com.google.android.material.R.style.Theme_MaterialComponents_DayNight);
+    LayoutInflater localInflater = LayoutInflater.from(themeWrapper);
+    convertView = localInflater.inflate(R.layout.item_session, parent, false);
+}
+
+
+            TerminalSession session = getItem(position);
+            TextView txtName = convertView.findViewById(R.id.txtSessionName);
+            //View btnClose = convertView.findViewById(R.id.btnCloseSession);
+            MaterialButton btnClose = convertView.findViewById(R.id.btnCloseSession);
+
+       if (session == terminalSession) {
+        convertView.setActivated(true); // Ini akan memicu state_activated="true" di XML
+        //convertView.setBackgroundColor(Color.parseColor("#6000FFFF")); 
+        txtName.setTypeface(null, Typeface.BOLD); // Opsional: Tebalkan teks yang aktif
+    } else {
+        convertView.setActivated(false);
+        txtName.setTypeface(null, Typeface.NORMAL);
+    }
+
+
+            //txtName.setText((position + 1) + ". " + (session.mSessionName != null ? session.mSessionName : "Session"));
+             txtName.setText((session.mSessionId + 1) + ". " + (session.mSessionName != null ? session.mSessionName : "Session"));
+            convertView.setOnClickListener(v -> {
+                switchSession(session);
+                if (dialogWrapper[0] != null) dialogWrapper[0].dismiss();
+            });
+
+              
+              btnClose.setOnClickListener(v -> {
+    TerminalSession sessionToDelete = getItem(position);
+    
+    // 1. Eksekusi penghapusan
+    handleSessionExit(sessionToDelete);
+    updateSessionBadge();
+
+    // 2. Cek apakah list masih ada isinya
+    if (mTerminalService.mTerminalSessions.isEmpty()) {
+        if (dialogWrapper[0] != null) dialogWrapper[0].dismiss();
+    } else {
+        // Refresh data adapter
+        notifyDataSetChanged();
+
+        // --- LOGIKA FOKUS KE SESI AKTIF ---
+        // Kita cari tahu di posisi mana 'terminalSession' berada sekarang
+        int activePosition = mTerminalService.mTerminalSessions.indexOf(terminalSession);
+        
+        if (activePosition != -1 && globalListView != null) {
+            // Paksa ListView untuk scroll/fokus ke posisi sesi yang aktif
+            globalListView.setSelection(activePosition);
+        }
+    }
+});
+
+
+
+             
+           /* btnClose.setOnClickListener(v -> {
+                handleSessionExit(session);
+                updateSessionBadge();
+                // --- LOGIKA TUTUP DIALOG ---
+                if (sessions.isEmpty()) {
+                    if (dialogWrapper[0] != null) dialogWrapper[0].dismiss();
+                } else {
+                    notifyDataSetChanged(); 
+                }
+            });*/
+
+            return convertView;
+        }
+    };
+
+    TextView title = new TextView(this);
+    title.setText("Active Sessions");
+    title.setTextColor(Color.WHITE);
+    title.setTextSize(20);
+    title.setPadding(40, 40, 40, 20);
+
+    dialogWrapper[0] = new AlertDialog.Builder(this)
+            .setCustomTitle(title)
+            .setAdapter(sessionAdapter, null)
+            .setPositiveButton("Close Menu", null)
+            .create();
+
+    dialogWrapper[0].show();
+    globalListView = dialogWrapper[0].getListView(); 
+    if (dialogWrapper[0].getWindow() != null) {
+        dialogWrapper[0].getWindow().setBackgroundDrawable(new ColorDrawable(Color.parseColor("#3605B0")));
+    }
+}
+
 	
 	private void showRadioDialog() {
   String[] options = {"Alpine", "Android"};
 final int[] selectedIndex = {0};
+
+final int[] tempChoice = {lastSelectedEnvironmentIndex};
 
 //  Custom adapter untuk radio text
 ArrayAdapter<String> adapter = new ArrayAdapter<String>(
@@ -485,7 +688,7 @@ AlertDialog dialog = new AlertDialog.Builder(this)
             // 3. Update variabel class setiap kali user klik (sebelum tekan OK)
             lastSelectedEnvironmentIndex = which;
         })
-        .setPositiveButton("OK", (d, which) -> {
+       /* .setPositiveButton("OK", (d, which) -> {
 			int index = lastSelectedEnvironmentIndex; 
             String modeName = (index == 0) ? "Alpine" : "Android";
             selectedTitle = (lastSelectedEnvironmentIndex == 0) ? "Alpine" : "Android";
@@ -501,13 +704,15 @@ AlertDialog dialog = new AlertDialog.Builder(this)
                     targetSession = createNewSession();
                 }
                 mTerminalService.registerSession(targetSession);
-                Toast.makeText(this, " Membuat Session " + modeName, Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, " Create Session " + modeName, Toast.LENGTH_SHORT).show();
             } else {
-                Toast.makeText(this, " Switch ke " + modeName, Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, "Switch to " + modeName, Toast.LENGTH_SHORT).show();
             }
 
             switchSession(targetSession);
-			/*int index = selectedIndex[0]; // 0 untuk Alpine, 1 untuk Android
+			
+///start
+int index = selectedIndex[0]; // 0 untuk Alpine, 1 untuk Android
     String modeName = (index == 0) ? "Alpine" : "Android";
     TerminalSession targetSession = null;
 
@@ -536,16 +741,17 @@ AlertDialog dialog = new AlertDialog.Builder(this)
 
     //  3. EKSEKUSI
     switchSession(targetSession);
-    
+   ///end
 			
-			*/
+			
 			
 			
 			
             //String selected = options[selectedIndex[0]];
             //Toast.makeText(this, "Dipilih: " + selected, Toast.LENGTH_SHORT).show();
         })
-        .setNegativeButton("Cancel", null)
+        .setNegativeButton("Cancel", null)*/
+      
         .create();
 
 dialog.show();
@@ -987,6 +1193,19 @@ TerminalSession session = new TerminalSession(
 @Override
 public boolean onCreateOptionsMenu(Menu menu) {
     getMenuInflater().inflate(R.menu.main_menu, menu);
+    
+    MenuItem menuItem = menu.findItem(R.id.action_show_sessions);
+    View actionView = menuItem.getActionView();
+    sessionBadgeTxt = actionView.findViewById(R.id.session_count_txt);
+
+    // Set klik listener pada actionView (karena kita pakai actionLayout)
+    actionView.setOnClickListener(v -> {
+        showSessionListDialog();
+    });
+
+    updateSessionBadge(); 
+    
+    
     return true;
 }
 		@Override
@@ -994,6 +1213,18 @@ public boolean onOptionsItemSelected(MenuItem item) {
     if (item.getItemId() == R.id.action_switch) {
 
        showRadioDialog();
+       
+
+        return true;
+    }else if (item.getItemId() == R.id.action_add) {
+        
+        new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
+    @Override
+    public void run() {
+      addNewSession();
+    }
+}, 1000);
+       
        
 
         return true;
