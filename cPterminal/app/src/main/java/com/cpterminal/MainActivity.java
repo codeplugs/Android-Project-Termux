@@ -40,6 +40,8 @@ import android.widget.ProgressBar; // Jika ingin pakai animasi muter
 import android.widget.LinearLayout; // Untuk menyusun ProgressBar & Teks
 import android.view.LayoutInflater;
 import android.widget.ListView;
+import android.content.ClipboardManager;
+import android.content.ClipData;
 
 import java.io.IOException;
 import java.io.File;
@@ -52,6 +54,7 @@ import com.termux.view.TerminalView;
 import com.termux.view.TerminalViewClient;
 import com.termux.terminal.TerminalSession.SessionChangedCallback;
 
+import com.cpterminal.BuildConfig;
 import com.cpterminal.extrakeys.ExtraKeysView;
 import com.cpterminal.extrakeys.ExtraKeysInfo;
 import com.cpterminal.extrakeys.ExtraKeyButton;
@@ -72,7 +75,9 @@ private int lastSelectedEnvironmentIndex = 0;
 private int sessionCounter = 0;
 private int lastSessionNumber = 0;
 private ListView globalListView;
-private ArrayAdapter<TerminalSession> sessionAdapter;
+private ArrayAdapter<TerminalSession> globalSessionAdapter;
+private AlertDialog sessionListDialog;
+
 private TextView sessionBadgeTxt;
 private ExtraKeysView extraKeysView;
  private ExtraKeysInfo currentExtraKeysInfo; // Tambahkan ini
@@ -141,6 +146,7 @@ public void onServiceConnected(ComponentName name, IBinder service) {
     TerminalService.TerminalServiceBinder binder = (TerminalService.TerminalServiceBinder) service;
     mTerminalService = binder.getService();
     
+    
     TerminalSession existingSession = mTerminalService.getActiveSession();
     File markerFile = new File(getFilesDir(), "AlpineInstalled");
 
@@ -202,6 +208,7 @@ sendToAlpine(
         
     }
     terminalView.attachSession(terminalSession);
+    
 }
 
 
@@ -220,6 +227,17 @@ protected void onStop() {
         mTerminalService = null;
     }
 }
+
+@Override
+protected void onResume() {
+    super.onResume();
+    // Beri sedikit delay (100-200ms) agar UI siap menerima update teks
+    new Handler(Looper.getMainLooper()).postDelayed(() -> {
+        updateSessionBadge();
+    }, 200);
+}
+
+
 
 
 @Override
@@ -248,7 +266,6 @@ protected void onNewIntent(Intent intent) {
     }
 }
 	
-	// Buat helper method agar kode onCreate lebih bersih
 private TerminalSession createNewSession() {
     String prefix = getFilesDir().getAbsolutePath();
     String shellPath = prefix + "/bin/bash";
@@ -471,8 +488,8 @@ private void addNewSession() {
     // Langsung pindah ke sesi yang baru dibuat
     switchSession(newSession);
     updateSessionBadge();
-    if (sessionAdapter != null) {
-        sessionAdapter.notifyDataSetChanged();
+    if (globalSessionAdapter != null) {
+        globalSessionAdapter.notifyDataSetChanged();
     }
     
     
@@ -542,112 +559,151 @@ private void dismissLoadingDialog() {
 	
 	private void showSessionListDialog() {
     if (mTerminalService == null) return;
-
     List<TerminalSession> sessions = mTerminalService.mTerminalSessions;
 
-    // Kita buat final array agar bisa diakses dari dalam inner class adapter
-    final AlertDialog[] dialogWrapper = new AlertDialog[1];
-
-    sessionAdapter = new ArrayAdapter<TerminalSession>(
-            this, R.layout.item_session, sessions) {
+    // 1. Setup Adapter
+    globalSessionAdapter = new ArrayAdapter<TerminalSession>(this, R.layout.item_session, sessions) {
         @Override
         public View getView(int position, View convertView, ViewGroup parent) {
-            /*if (convertView == null) {
-                convertView = getLayoutInflater().inflate(R.layout.item_session, parent, false);
-            }*/
             if (convertView == null) {
-    // Bungkus layout dengan tema Material khusus untuk baris ini saja
-    Context themeWrapper = new androidx.appcompat.view.ContextThemeWrapper(getContext(), com.google.android.material.R.style.Theme_MaterialComponents_DayNight);
-    LayoutInflater localInflater = LayoutInflater.from(themeWrapper);
-    convertView = localInflater.inflate(R.layout.item_session, parent, false);
-}
-
+                Context themeWrapper = new androidx.appcompat.view.ContextThemeWrapper(getContext(), 
+                    com.google.android.material.R.style.Theme_MaterialComponents_DayNight);
+                convertView = LayoutInflater.from(themeWrapper).inflate(R.layout.item_session, parent, false);
+            }
 
             TerminalSession session = getItem(position);
             TextView txtName = convertView.findViewById(R.id.txtSessionName);
-            //View btnClose = convertView.findViewById(R.id.btnCloseSession);
             MaterialButton btnClose = convertView.findViewById(R.id.btnCloseSession);
+            btnClose.setRippleColor(ColorStateList.valueOf(Color.TRANSPARENT));
+            btnClose.setElevation(0);
+            btnClose.setStateListAnimator(null);
+            // LOGIKA TANDAI AKTIF (HIGHLIGHT)
+            if (session == terminalSession) {
+            	btnClose.setVisibility(View.GONE); 
+                convertView.setBackgroundColor(Color.parseColor("#4000FFFF")); // Cyan Transparan
+                txtName.setTextColor(Color.parseColor("#00FFFF")); // Teks Cyan
+                txtName.setTypeface(null, Typeface.BOLD);
+            } else {
+            	btnClose.setVisibility(View.VISIBLE);
+                convertView.setBackgroundColor(Color.TRANSPARENT);
+                txtName.setTextColor(Color.WHITE);
+                txtName.setTypeface(null, Typeface.NORMAL);
+            }
 
-       if (session == terminalSession) {
-        convertView.setActivated(true); // Ini akan memicu state_activated="true" di XML
-        //convertView.setBackgroundColor(Color.parseColor("#6000FFFF")); 
-        txtName.setTypeface(null, Typeface.BOLD); // Opsional: Tebalkan teks yang aktif
-    } else {
-        convertView.setActivated(false);
-        txtName.setTypeface(null, Typeface.NORMAL);
-    }
+            // Penomoran ID
+            txtName.setText((session.mSessionId + 1) + ". " + (session.mSessionName != null ? session.mSessionName : "Session"));
 
-
-            //txtName.setText((position + 1) + ". " + (session.mSessionName != null ? session.mSessionName : "Session"));
-             txtName.setText((session.mSessionId + 1) + ". " + (session.mSessionName != null ? session.mSessionName : "Session"));
+            // KLIK BARIS: Pindah Sesi, Dialog tetap buka
             convertView.setOnClickListener(v -> {
                 switchSession(session);
-                if (dialogWrapper[0] != null) dialogWrapper[0].dismiss();
+                notifyDataSetChanged(); // Refresh highlight biru
             });
 
-              
-              btnClose.setOnClickListener(v -> {
-    TerminalSession sessionToDelete = getItem(position);
-    
-    // 1. Eksekusi penghapusan
-    handleSessionExit(sessionToDelete);
-    updateSessionBadge();
+            // KLIK TOMBOL HAPUS (DI KANAN): Dialog tetap buka
+            btnClose.setOnClickListener(v -> {
+                TerminalSession toDelete = session;
+                boolean isDeletingActive = (toDelete == terminalSession);
 
-    // 2. Cek apakah list masih ada isinya
-    if (mTerminalService.mTerminalSessions.isEmpty()) {
-        if (dialogWrapper[0] != null) dialogWrapper[0].dismiss();
-    } else {
-        // Refresh data adapter
-        notifyDataSetChanged();
-
-        // --- LOGIKA FOKUS KE SESI AKTIF ---
-        // Kita cari tahu di posisi mana 'terminalSession' berada sekarang
-        int activePosition = mTerminalService.mTerminalSessions.indexOf(terminalSession);
-        
-        if (activePosition != -1 && globalListView != null) {
-            // Paksa ListView untuk scroll/fokus ke posisi sesi yang aktif
-            globalListView.setSelection(activePosition);
-        }
-    }
-});
-
-
-
-             
-           /* btnClose.setOnClickListener(v -> {
-                handleSessionExit(session);
+                // Hapus sesi melalui service
+                handleSessionExit(toDelete);
                 updateSessionBadge();
-                // --- LOGIKA TUTUP DIALOG ---
+
                 if (sessions.isEmpty()) {
-                    if (dialogWrapper[0] != null) dialogWrapper[0].dismiss();
+                    sessionListDialog.dismiss();
                 } else {
-                    notifyDataSetChanged(); 
+                    // Jika yang dihapus sedang aktif, pindahkan ke sesi terdekat
+                    if (isDeletingActive) {
+                        int nextIndex = (position >= sessions.size()) ? sessions.size() - 1 : position;
+                        switchSession(sessions.get(nextIndex));
+                    }
+                    
+                    notifyDataSetChanged();
+                    
+               
                 }
-            });*/
+            });
 
             return convertView;
         }
     };
 
+    // 2. Setup Dialog Builder
     TextView title = new TextView(this);
     title.setText("Active Sessions");
     title.setTextColor(Color.WHITE);
-    title.setTextSize(20);
     title.setPadding(40, 40, 40, 20);
+    title.setTextSize(18);
 
-    dialogWrapper[0] = new AlertDialog.Builder(this)
+    sessionListDialog = new AlertDialog.Builder(this)
             .setCustomTitle(title)
-            .setAdapter(sessionAdapter, null)
-            .setPositiveButton("Close Menu", null)
-            .create();
+            .setAdapter(globalSessionAdapter, null)
+       .create();
 
-    dialogWrapper[0].show();
-    globalListView = dialogWrapper[0].getListView(); 
-    if (dialogWrapper[0].getWindow() != null) {
-        dialogWrapper[0].getWindow().setBackgroundDrawable(new ColorDrawable(Color.parseColor("#3605B0")));
+    sessionListDialog.show();
+
+    // 3. ATUR UKURAN BOX (Agar tidak menghalangi terminal)
+    globalListView = sessionListDialog.getListView();
+    if (sessionListDialog.getWindow() != null) {
+        // Warna background dialog ungu gelap
+        sessionListDialog.getWindow().setBackgroundDrawable(new ColorDrawable(Color.parseColor("#3605B0")));
+        
+        // Ukuran Kotak: Lebar 85% layar, Tinggi 60% layar
+        int width = (int)(getResources().getDisplayMetrics().widthPixels * 0.85);
+        int height = (int)(getResources().getDisplayMetrics().heightPixels * 0.60);
+        sessionListDialog.getWindow().setLayout(width, height);
+        
+        // Atur posisi agar di tengah
+        sessionListDialog.getWindow().setGravity(Gravity.CENTER);
+        
+        // Efek transparan pada background luar dialog (dim)
+        sessionListDialog.getWindow().setDimAmount(0.5f);
     }
 }
 
+private void showAboutDialog() {
+        String versionName = BuildConfig.VERSION_NAME;
+        int versionCode = BuildConfig.VERSION_CODE;
+String libPath = getApplicationInfo().nativeLibraryDir;
+
+        String message =
+                "cP Terminal\n\n" +
+                "Version: " + versionName + " (" + versionCode + ")\n\n" +
+                "Lib path: " + libPath + "\n\n" +
+                "Developer: Codeplug\n" +
+                "© 2026 All Rights Reserved\n\n" +
+                "Terminal Android .\n";
+
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("Info App");
+        //builder.setMessage(message);
+TextView textView = new TextView(this);
+textView.setText(message);
+textView.setTextColor(0xFFFFFFFF); //
+textView.setPadding(50, 30, 50, 30);
+builder.setView(textView);
+        builder.setPositiveButton("Copy", (dialog, which) -> {
+
+    ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+    ClipData clip = ClipData.newPlainText("About Info", message);
+    clipboard.setPrimaryClip(clip);
+
+    Toast.makeText(this, "Copy to clipboard", Toast.LENGTH_SHORT).show();
+});
+AlertDialog dialog = builder.create();
+dialog.setOnShowListener(d -> {
+	TextView title = dialog.findViewById(
+        getResources().getIdentifier("alertTitle", "id", "android")
+);
+    if (title != null) {
+        title.setTextColor(0xFFFFFFFF); // putih
+    }
+    dialog.getWindow().setBackgroundDrawableResource(android.R.color.transparent);
+    dialog.getWindow().setBackgroundDrawable(
+            new android.graphics.drawable.ColorDrawable(0xFF3605B0)
+    );
+});
+        dialog.show();
+    }
 	
 	private void showRadioDialog() {
   String[] options = {"Alpine", "Android"};
@@ -810,18 +866,52 @@ dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setTextColor(Color.WHITE);
         if (currentSession == null) return;
 
         switch (key) {
-			
-            case "ESC": currentSession.write("\u001b"); break;
-			case "BKSP": // Tambahkan case ini jika library mengirimkan singkatan
-            currentSession.write("\u007f"); // Kode ASCII untuk menghapus
-            break;
-            case "TAB": currentSession.write("\t"); break;
-            case "ENTER": currentSession.write("\r"); break;
-            case "UP": currentSession.write("\u001b[A"); break;
-            case "DOWN": currentSession.write("\u001b[B"); break;
-            case "RIGHT": currentSession.write("\u001b[C"); break;
-            case "LEFT": currentSession.write("\u001b[D"); break;
-           
+    case "ESC": 
+        currentSession.write("\u001b"); 
+        break;
+    case "TAB": 
+        currentSession.write("\t"); 
+        break;
+    case "ENTER": 
+        currentSession.write("\r"); 
+        break;
+    
+    // Gunakan dispatchKeyEvent untuk navigasi agar dash/sh tidak error ^[[A
+    case "UP": 
+        terminalView.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_UP)); 
+        break;
+    case "DOWN": 
+        terminalView.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_DOWN)); 
+        break;
+    case "LEFT": 
+        terminalView.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_LEFT)); 
+        break;
+    case "RIGHT": 
+        terminalView.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_RIGHT)); 
+        break;
+
+    // Tambahan sesuai gambar
+    case "HOME": 
+        terminalView.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MOVE_HOME)); 
+        break;
+    case "END": 
+        terminalView.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MOVE_END)); 
+        break;
+    case "PGUP": 
+        currentSession.write("\u001b[A"); 
+        break;
+    case "PGDN": 
+        currentSession.write("\u001b[B"); 
+        break;
+    
+    case "/": 
+        currentSession.write("/"); 
+        break;
+    case "-": 
+        currentSession.write("-"); 
+        break;
+
+   
 			default:
             if (key.length() == 1) {
                 // Jika tombol 'C' di Extra Keys diklik saat tombol CTRL software aktif
@@ -895,7 +985,7 @@ terminalView.setFocusable(true);
 		
 
 		
-		String buttonsJson = "[" +
+		/* String buttonsJson = "[" +
     "[" +
     "  'ESC', " +
     "  {key: 'MY_CONTROL_KEY', display: 'CTRL'}, " + // Paksa sebagai objek
@@ -904,7 +994,29 @@ terminalView.setFocusable(true);
     "  'UP'" +
     "]," +
     "['LEFT', 'DOWN', 'RIGHT']" +
+    "]"; */
+    
+    String buttonsJson = "[" +
+    "[" +
+    "  'ESC', " +
+    "  '/', " +
+    "  '-', " +
+    "  'HOME', " +
+    "  'UP', " +
+    "  'END', " +
+    "  'PGUP'" + // Tambah PGUP di sini
+    "]," +
+    "[" +
+    "  'TAB', " +
+    "  {key: 'MY_CONTROL_KEY', display: 'CTRL'}, " + 
+    "  {key: 'MY_ALT_KEY', display: 'ALT'}, " +  
+    "  'LEFT', " +
+    "  'DOWN', " +
+    "  'RIGHT', " +
+    "  'PGDN'" + // Tambah PGDN di sini
+    "]" +
     "]";
+    
 	
 	
 try {
@@ -1150,7 +1262,15 @@ public void onColorsChanged(TerminalSession session) {
     public void onTitleChanged(TerminalSession session) {}
 
     @Override
-    public void onSessionFinished(TerminalSession session) {}
+    public void onSessionFinished(TerminalSession session) {
+  runOnUiThread(() -> {
+  	if (mTerminalService != null) {
+            mTerminalService.mTerminalSessions.remove(session);
+        }
+      updateSessionBadge();
+         });
+
+}
 
     @Override
     public void onClipboardText(TerminalSession session, String text) {}
@@ -1201,10 +1321,9 @@ public boolean onCreateOptionsMenu(Menu menu) {
     // Set klik listener pada actionView (karena kita pakai actionLayout)
     actionView.setOnClickListener(v -> {
         showSessionListDialog();
-    });
-
+        
     updateSessionBadge(); 
-    
+    });
     
     return true;
 }
@@ -1216,15 +1335,15 @@ public boolean onOptionsItemSelected(MenuItem item) {
        
 
         return true;
+    }else if (item.getItemId() == R.id.action_info) {
+
+       showAboutDialog();
+       
+
+        return true;
     }else if (item.getItemId() == R.id.action_add) {
         
-        new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
-    @Override
-    public void run() {
-      addNewSession();
-    }
-}, 1000);
-       
+ addNewSession();
        
 
         return true;
